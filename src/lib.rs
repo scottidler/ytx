@@ -1,4 +1,5 @@
 pub mod output;
+pub mod summarize;
 pub mod whisper;
 pub mod youtube;
 

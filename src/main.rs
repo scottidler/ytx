@@ -120,18 +120,19 @@ async fn main() -> Result<()> {
 
         let rendered = match cli.format {
             OutputFormat::Text => ytx::output::render_text(&transcript),
-            OutputFormat::Json => {
-                bail!("JSON output not yet implemented (Phase 3)");
-            }
-            OutputFormat::Srt => {
-                bail!("SRT output not yet implemented (Phase 3)");
-            }
+            OutputFormat::Json => ytx::output::render_json(&transcript),
+            OutputFormat::Srt => ytx::output::render_srt(&transcript),
         };
 
         if let Some(ref path) = cli.output {
             std::fs::write(path, &rendered)?;
         } else {
-            print!("{rendered}");
+            println!("{rendered}");
+        }
+
+        if cli.summarize {
+            let summary = ytx::summarize::summarize(&client, &transcript, &cli.model).await?;
+            println!("\n--- Summary ---\n{summary}");
         }
     }
 
