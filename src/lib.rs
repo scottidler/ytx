@@ -1,13 +1,14 @@
+pub mod cache;
 pub mod config;
 pub mod output;
 pub mod summarize;
 pub mod whisper;
 pub mod youtube;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A single captioned segment
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Segment {
     pub text: String,
     pub start: f64,
@@ -15,14 +16,14 @@ pub struct Segment {
 }
 
 /// Source of the transcript
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TranscriptSource {
     Caption,
     Whisper,
 }
 
 /// Complete transcript for a video
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transcript {
     pub video_id: String,
     pub title: String,

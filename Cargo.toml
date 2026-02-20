@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Scott Aidler <scott@aidler.com>"]
 build = "build.rs"
-description = "YouTube transcript extractor with caption and Whisper fallback"
+description = "YouTube transcript extractor"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

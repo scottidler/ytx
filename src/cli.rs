@@ -38,9 +38,9 @@ pub struct Cli {
     #[arg(long)]
     pub whisper_only: bool,
 
-    /// Don't fall back to Whisper if captions unavailable
+    /// Bypass cache and re-fetch from YouTube
     #[arg(long)]
-    pub no_fallback: bool,
+    pub no_cache: bool,
 
     /// LLM model for summarization
     #[arg(long, default_value = "claude-sonnet-4-6")]

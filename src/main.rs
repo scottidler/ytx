@@ -53,13 +53,13 @@ fn build_after_help() -> String {
 
     let yt_dlp_line = match &yt_dlp {
         Some(v) => format!("  \x1b[32m✅\x1b[0m yt-dlp     {v}"),
-        None => "  \x1b[31m❌\x1b[0m yt-dlp     (not found — needed for Whisper fallback)".to_string(),
+        None => "  \x1b[31m❌\x1b[0m yt-dlp     (not found — needed for --whisper-only)".to_string(),
     };
 
     let log_path = log_dir().join("ytx.log");
 
     format!(
-        "\nREQUIRED TOOLS:\n{yt_dlp_line}\n\nLogs are written to: {}",
+        "\nOPTIONAL TOOLS (only needed for --whisper-only):\n{yt_dlp_line}\n\nLogs are written to: {}",
         log_path.display()
     )
 }
@@ -151,6 +151,11 @@ async fn main() -> Result<()> {
                 async move { ytx::whisper::transcribe(client, video_id, lang, model).await }
             })
             .await?
+        } else if let Some(cached) = (!cli.no_cache).then(|| ytx::cache::load(&video_id, &lang)).flatten() {
+            if cli.verbose {
+                eprintln!("Loaded transcript from cache");
+            }
+            cached
         } else {
             let caption_result = retry(3, || {
                 let client = &client;
@@ -160,16 +165,11 @@ async fn main() -> Result<()> {
             })
             .await;
 
-            match caption_result {
+            let t = match caption_result {
                 Ok(t) => t,
-                Err(e) => {
-                    if cli.no_fallback {
-                        return Err(e.wrap_err("caption extraction failed and --no-fallback set"));
-                    }
-                    if cli.verbose {
-                        eprintln!("Caption extraction failed: {e}");
-                        eprintln!("Falling back to Whisper transcription...");
-                    }
+                Err(caption_err) => {
+                    debug!("Caption extraction failed: {caption_err}");
+                    eprintln!("[whisper fallback]");
                     retry(3, || {
                         let client = &client;
                         let video_id = &video_id;
@@ -179,7 +179,12 @@ async fn main() -> Result<()> {
                     })
                     .await?
                 }
+            };
+
+            if let Err(e) = ytx::cache::save(&t) {
+                debug!("Failed to cache transcript: {e}");
             }
+            t
         };
 
         if cli.verbose {

@@ -13,9 +13,9 @@ const MAX_UPLOAD_BYTES: u64 = 25 * 1024 * 1024;
 /// Whisper transcription model
 #[derive(Debug, Clone, Default)]
 pub enum WhisperModel {
-    #[default]
     Gpt4oMiniTranscribe,
     Gpt4oTranscribe,
+    #[default]
     Whisper1,
 }
 
@@ -26,6 +26,18 @@ impl WhisperModel {
             WhisperModel::Gpt4oTranscribe => "gpt-4o-transcribe",
             WhisperModel::Whisper1 => "whisper-1",
         }
+    }
+
+    fn response_format(&self) -> &str {
+        match self {
+            WhisperModel::Whisper1 => "verbose_json",
+            // Newer transcribe models only support "json" or "text"
+            _ => "json",
+        }
+    }
+
+    fn supports_timestamp_granularities(&self) -> bool {
+        matches!(self, WhisperModel::Whisper1)
     }
 }
 
@@ -55,9 +67,6 @@ pub async fn transcribe(
         transcribe_file(client, &api_key, &audio_path, model, lang).await?
     };
 
-    // Clean up temp file
-    let _ = std::fs::remove_file(&audio_path);
-
     Ok(Transcript {
         video_id: video_id.to_string(),
         title,
@@ -72,8 +81,14 @@ fn download_audio(video_id: &str) -> Result<PathBuf> {
     let output_template = format!("/tmp/ytx-{video_id}.%(ext)s");
     let output_path = PathBuf::from(format!("/tmp/ytx-{video_id}.mp3"));
 
-    // Clean up any existing file
-    let _ = std::fs::remove_file(&output_path);
+    // Reuse existing file on retry (avoid re-downloading after API errors)
+    if output_path.exists() {
+        debug!(
+            "Audio file already exists, skipping download: {}",
+            output_path.display()
+        );
+        return Ok(output_path);
+    }
 
     debug!("Downloading audio via yt-dlp: {url}");
 
@@ -139,12 +154,15 @@ async fn transcribe_file(
         .file_name(file_name)
         .mime_str("audio/mpeg")?;
 
-    let form = multipart::Form::new()
+    let mut form = multipart::Form::new()
         .part("file", file_part)
         .text("model", model.api_name().to_string())
         .text("language", lang.to_string())
-        .text("response_format", "verbose_json")
-        .text("timestamp_granularities[]", "segment");
+        .text("response_format", model.response_format().to_string());
+
+    if model.supports_timestamp_granularities() {
+        form = form.text("timestamp_granularities[]", "segment");
+    }
 
     let resp = client
         .post("https://api.openai.com/v1/audio/transcriptions")
