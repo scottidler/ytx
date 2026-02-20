@@ -90,8 +90,10 @@ async fn main() -> Result<()> {
         let video_id = ytx::extract_video_id(url_input)
             .ok_or_else(|| eyre::eyre!("could not extract video ID from: {url_input}"))?;
 
+        let whisper_model = ytx::whisper::WhisperModel::default();
+
         let transcript = if cli.whisper_only {
-            bail!("Whisper fallback not yet implemented (Phase 2)");
+            ytx::whisper::transcribe(&client, &video_id, &cli.lang, &whisper_model).await?
         } else {
             match ytx::youtube::fetch_captions(&client, &video_id, &cli.lang).await {
                 Ok(t) => t,
@@ -99,7 +101,8 @@ async fn main() -> Result<()> {
                     if cli.no_fallback {
                         return Err(e.wrap_err("caption extraction failed and --no-fallback set"));
                     }
-                    bail!("caption extraction failed: {e}\n\nWhisper fallback not yet implemented (Phase 2)");
+                    eprintln!("Caption extraction failed, falling back to Whisper: {e}");
+                    ytx::whisper::transcribe(&client, &video_id, &cli.lang, &whisper_model).await?
                 }
             }
         };

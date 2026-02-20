@@ -1,4 +1,5 @@
 pub mod output;
+pub mod whisper;
 pub mod youtube;
 
 use serde::Serialize;
