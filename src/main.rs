@@ -1,9 +1,10 @@
 use std::io::{self, BufRead};
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 use eyre::{Result, bail};
-use log::info;
+use log::{debug, info};
 
 mod cli;
 
@@ -63,6 +64,29 @@ fn build_after_help() -> String {
     )
 }
 
+/// Retry an async operation with exponential backoff
+async fn retry<F, Fut, T>(max_attempts: u32, operation: F) -> Result<T>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut last_err = None;
+    for attempt in 0..max_attempts {
+        match operation().await {
+            Ok(val) => return Ok(val),
+            Err(e) => {
+                if attempt + 1 < max_attempts {
+                    let delay = Duration::from_millis(500 * 2u64.pow(attempt));
+                    debug!("Attempt {} failed: {e}, retrying in {delay:?}", attempt + 1);
+                    tokio::time::sleep(delay).await;
+                }
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     setup_logging()?;
@@ -71,6 +95,26 @@ async fn main() -> Result<()> {
     let cmd = <Cli as clap::CommandFactory>::command().after_help(after_help);
     let matches = cmd.get_matches();
     let cli = <Cli as clap::FromArgMatches>::from_arg_matches(&matches)?;
+
+    // Load config file (non-fatal if missing/invalid)
+    let config = ytx::config::Config::load().unwrap_or_default();
+
+    // Apply config defaults (CLI flags take priority)
+    let lang = cli.lang.clone();
+    let model = cli.model.clone();
+
+    if cli.verbose {
+        let config_path = ytx::config::config_path();
+        if config_path.exists() {
+            eprintln!("Config: {}", config_path.display());
+        }
+        if let Some(ref default_lang) = config.default_lang {
+            debug!("Config default_lang: {default_lang}");
+        }
+        if let Some(ref default_model) = config.default_model {
+            debug!("Config default_model: {default_model}");
+        }
+    }
 
     let client = reqwest::Client::new();
 
@@ -83,26 +127,57 @@ async fn main() -> Result<()> {
     };
 
     if urls.is_empty() {
-        bail!("no URL or video ID provided");
+        bail!("no URL or video ID provided\n\nUsage: ytx <URL>\n       echo <URL> | ytx");
     }
 
     for url_input in &urls {
-        let video_id = ytx::extract_video_id(url_input)
-            .ok_or_else(|| eyre::eyre!("could not extract video ID from: {url_input}"))?;
+        let url_input = url_input.trim().to_string();
+        if url_input.is_empty() {
+            continue;
+        }
+
+        let video_id = ytx::extract_video_id(&url_input)
+            .ok_or_else(|| eyre::eyre!("could not extract video ID from: {url_input}\n\nSupported formats:\n  https://www.youtube.com/watch?v=ID\n  https://youtu.be/ID\n  https://www.youtube.com/embed/ID\n  https://www.youtube.com/shorts/ID\n  <11-character video ID>"))?;
 
         let whisper_model = ytx::whisper::WhisperModel::default();
+        let lang = lang.clone();
 
         let transcript = if cli.whisper_only {
-            ytx::whisper::transcribe(&client, &video_id, &cli.lang, &whisper_model).await?
+            retry(3, || {
+                let client = &client;
+                let video_id = &video_id;
+                let lang = &lang;
+                let model = &whisper_model;
+                async move { ytx::whisper::transcribe(client, video_id, lang, model).await }
+            })
+            .await?
         } else {
-            match ytx::youtube::fetch_captions(&client, &video_id, &cli.lang).await {
+            let caption_result = retry(3, || {
+                let client = &client;
+                let video_id = &video_id;
+                let lang = &lang;
+                async move { ytx::youtube::fetch_captions(client, video_id, lang).await }
+            })
+            .await;
+
+            match caption_result {
                 Ok(t) => t,
                 Err(e) => {
                     if cli.no_fallback {
                         return Err(e.wrap_err("caption extraction failed and --no-fallback set"));
                     }
-                    eprintln!("Caption extraction failed, falling back to Whisper: {e}");
-                    ytx::whisper::transcribe(&client, &video_id, &cli.lang, &whisper_model).await?
+                    if cli.verbose {
+                        eprintln!("Caption extraction failed: {e}");
+                        eprintln!("Falling back to Whisper transcription...");
+                    }
+                    retry(3, || {
+                        let client = &client;
+                        let video_id = &video_id;
+                        let lang = &lang;
+                        let model = &whisper_model;
+                        async move { ytx::whisper::transcribe(client, video_id, lang, model).await }
+                    })
+                    .await?
                 }
             }
         };
@@ -126,12 +201,15 @@ async fn main() -> Result<()> {
 
         if let Some(ref path) = cli.output {
             std::fs::write(path, &rendered)?;
+            if cli.verbose {
+                eprintln!("Output written to: {}", path.display());
+            }
         } else {
             println!("{rendered}");
         }
 
         if cli.summarize {
-            let summary = ytx::summarize::summarize(&client, &transcript, &cli.model).await?;
+            let summary = ytx::summarize::summarize(&client, &transcript, &model).await?;
             println!("\n--- Summary ---\n{summary}");
         }
     }
