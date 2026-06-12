@@ -26,7 +26,7 @@ fn setup_logging() -> Result<()> {
 }
 
 fn log_dir() -> PathBuf {
-    dirs::data_local_dir()
+    ytx::config::xdg_data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("ytx")
         .join("logs")
